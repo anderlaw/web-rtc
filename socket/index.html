@@ -114,12 +114,18 @@
             //发起方收到应答
             this.socket.on('videoAnswer',async data => {
                 const {answer,from,target} = data
+                targetUsername = data.target
                 // const sessionDesc = new RTCSessionDescription(answer)
                 await this.pc.setRemoteDescription(answer)
             })
             this.pc.onicecandidate = (e) => {
                 //会多次触发
                 if (e.candidate) {
+                    console.log( {
+                        from:myUsername,
+                        target:targetUsername,
+                        candidate: e.candidate
+                    })
                     this.socket.emit("videoCandidate", {
                         from:myUsername,
                         target:targetUsername,
@@ -140,6 +146,7 @@
             };
             // 接受方
             this.socket.on('videoOffer',async data => {
+                targetUsername = data.from
                 this.acceptVideoChat(data)
             })
 
@@ -200,61 +207,6 @@
             webRTC.initiateVideoChat(usernmae)
         }
     }
-
-    const startVideoChat = async (targetUsername) => {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: false
-        })
-        //显示本地摄像头
-        document.querySelector('#me').srcObject = stream
-
-        const pc = new RTCPeerConnection()
-        //添加流到端连接
-        for (const track of stream.getTracks()) {
-            console.log(track)
-            pc.addTrack(track,this.stream);
-        }
-        //创建SDP信息
-        const offer = await pc.createOffer()
-        await pc.setLocalDescription(offer);
-        //发送offer到信令服务器
-        this.socket.emit('videoOffer',{
-            from:username,
-            target:targetUsername,
-            offer
-        })
-        this.socket.on('videoAnswer',async data => {
-            const {answer,from,target} = data
-            const sessionDesc = new RTCSessionDescription(answer)
-            await pc.setRemoteDescription(sessionDesc)
-        })
-        pc.onicecandidate = (e) => {
-            //会多次触发
-            console.log(e)
-            if (e.candidate) {
-                this.socket.emit("videoCandidate", {
-                    from:username,
-                    target:targetUsername,
-                    candidate: e.candidate
-                })
-            }
-        };
-        socket.on('videoCandidate',async data => {
-            const {candidate,from,target} = data
-            // const iceCandidate = new RTCIceCandidate(candidate)
-            await pc.addIceCandidate(candidate)
-        })
-        pc.ontrack = (e) => {
-            console.log(e.streams)
-            if (e && e.streams) {
-                document.querySelector('#other').srcObject = e.streams[0];
-
-            }
-        };
-    }
-
-
 </script>
 </body>
 </html>
