@@ -1,7 +1,23 @@
 const app = require('express')()
 const UserSocketMapper = require('./cache')
-const http = require('http').createServer(app)
-const io = require('socket.io')(http)
+const { createServer } = require("https");
+const fs = require("fs");
+
+
+// 证书配置
+var options = {
+    key: fs.readFileSync('./cert/server.key'),
+    cert: fs.readFileSync('./cert/server.crt')
+}
+
+const httpServer = createServer(options, app);
+
+const io = require("socket.io")(httpServer, {
+    // 跨域配置
+    cors: {
+        origin: true,
+    }
+});
 const userSocketMapper = new UserSocketMapper()
 
 app.get('/', (req, res) => {
@@ -71,6 +87,6 @@ io.on('connection', socket => {
     //     })
     // })
 })
-http.listen(4000, () => {
+httpServer.listen(4000, () => {
     console.log(`server is running in port ${4000}`)
 })
