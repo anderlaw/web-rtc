@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>web-RTC</title>
+    <style>
+        body{
+            font-size: 16px;
+        }
+        .container {
+            display: flex;
+            align-items: center;
+        }
+
+        .container > video {
+            flex: 1 0 auto;
+            height: 200px;
+        }
+        #user-box{
+            width: 300px;
+            background-image: linear-gradient(45deg, #dbc9c9, #98d8e000);
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        #user-box > * {
+            padding:0 10px;
+            line-height: 30px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+<div>
+    <input id="username" placeholder="用户名"/>
+    <button onclick="registerUser()">注册用户</button>
+</div>
+<h3>点击用户名开启视频会话</h3>
+<div style="display: flex;align-items: flex-start;">
+    <div id="user-box">
+    </div>
+    <div class="container">
+<!--        <div style="position: relative;width: 600px;height: 300px;">-->
+<!--            <video autoplay playsinline id="original-video" style="visibility: hidden;position: absolute;left: 0;top: 0;width: 100%;height: 100%;"></video>-->
+<!--            <canvas id="display-video" style="position: absolute;left: 0;top: 0;width: 100%;height: 100%;"></canvas>-->
+<!--        </div>-->
+        <video autoplay playsinline id="me"></video>
+
+        <video autoplay playsinline id="other"></video>
+    </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+    let myUsername;
+    let targetUsername;
+    let onlineUsers = [];
+    class WebRTC {
+        constructor() {
+            this.pc = new RTCPeerConnection()
+            this.socket = io()
+            this.stream = null
+            this.init()
+
+        }
+        async initLocalVideoStream(){
+            this.stream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: false
+            })
+        }
+        //主动发起视频聊天
+        async initiateVideoChat(target){
+            targetUsername = target;
+
+            await this.initLocalVideoStream()
+            // 开启本地流
+            document.querySelector('#me').srcObject = this.stream
+
+            //添加流到端连接
+            for (const track of this.stream.getTracks()) {
+                this.pc.addTrack(track,this.stream);
+            }
+            //创建SDP信息
+            const offer = await this.pc.createOffer()
+            await this.pc.setLocalDescription(offer);
+            //发送offer到信令服务器
+            this.socket.emit('videoOffer',{
+                from:myUsername,
+                target:targetUsername,
+                offer
+            })
+        }
+        init(){
+            //new user login
+            this.socket.on('error-userjoin',()=>{
+                myUsername = document.querySelector('#username').value = ''
+            })
+            //user online
+            this.socket.on('userOnline',curUsername => {
+                if(username === curUsername){
+                    myUsername = curUsername
+                    console.log('注册成功')
+                }
+                fetchOnlineUsers()
+            })
+            //user offline
+            this.socket.on('userOffline',username => {
+                fetchOnlineUsers()
+            })
+            //发起方收到应答
+            this.socket.on('videoAnswer',async data => {
+                const {answer,from,target} = data
+                // const sessionDesc = new RTCSessionDescription(answer)
+                await this.pc.setRemoteDescription(answer)
+            })
+            this.pc.onicecandidate = (e) => {
+                //会多次触发
+                if (e.candidate) {
+                    this.socket.emit("videoCandidate", {
+                        from:myUsername,
+                        target:targetUsername,
+                        candidate: e.candidate
+                    })
+                }
+            };
+            this.socket.on('videoCandidate',async data => {
+                const {candidate} = data
+                // const iceCandidate = new RTCIceCandidate(candidate)
+                await this.pc.addIceCandidate(candidate)
+            })
+            this.pc.ontrack = (e) => {
+                console.log(e.streams)
+                if (e && e.streams) {
+                    document.querySelector('#other').srcObject = e.streams[0];
+                }
+            };
+            // 接受方
+            this.socket.on('videoOffer',async data => {
+                this.acceptVideoChat(data)
+            })
+
+        }
+        //被动发起视频聊天
+        async acceptVideoChat(data){
+
+            console.log(`收到来自${data.from}的视频通话请求`)
+            await this.initLocalVideoStream()
+            // 开启本地流
+            document.querySelector('#me').srcObject = this.stream
+
+            const {offer} = data;
+            const sessionDesc = new RTCSessionDescription(offer)
+            await this.pc.setRemoteDescription(sessionDesc)
+
+            this.stream.getTracks().forEach((track) => {
+                this.pc.addTrack(track, this.stream);
+            })
+
+            const answer = await this.pc.createAnswer()
+            await this.pc.setLocalDescription(answer)
+
+            this.socket.emit('videoAnswer',{
+                from:myUsername,
+                target:data.from,
+                answer:answer
+            })
+        }
+    }
+    const webRTC = new WebRTC();
+
+    const fetchOnlineUsers = () => {
+        fetch('/userlist',{
+            method:'get',
+        }).then(response => response.json()).then(res => {
+            onlineUsers = res
+            updateUserList()
+        })
+    }
+    const updateUserList = () => {
+        document.querySelector('#user-box').innerHTML = onlineUsers.map(username => {
+            return `<div class="user-item">${username}</div>`;
+        }).join('')
+    }
+    const registerUser = () => {
+        if(myUsername){
+            return
+        }
+        myUsername = document.querySelector('#username').value
+        webRTC.socket.emit('userOnline',myUsername)
+    }
+
+    //点击某个用户：发起视频会话
+    document.querySelector('#user-box').onclick = (e) => {
+        if(e.target.classList.contains('user-item')){
+            const usernmae = e.target.textContent
+            webRTC.initiateVideoChat(usernmae)
+        }
+    }
+
+    const startVideoChat = async (targetUsername) => {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+        })
+        //显示本地摄像头
+        document.querySelector('#me').srcObject = stream
+
+        const pc = new RTCPeerConnection()
+        //添加流到端连接
+        for (const track of stream.getTracks()) {
+            console.log(track)
+            pc.addTrack(track,this.stream);
+        }
+        //创建SDP信息
+        const offer = await pc.createOffer()
+        await pc.setLocalDescription(offer);
+        //发送offer到信令服务器
+        this.socket.emit('videoOffer',{
+            from:username,
+            target:targetUsername,
+            offer
+        })
+        this.socket.on('videoAnswer',async data => {
+            const {answer,from,target} = data
+            const sessionDesc = new RTCSessionDescription(answer)
+            await pc.setRemoteDescription(sessionDesc)
+        })
+        pc.onicecandidate = (e) => {
+            //会多次触发
+            console.log(e)
+            if (e.candidate) {
+                this.socket.emit("videoCandidate", {
+                    from:username,
+                    target:targetUsername,
+                    candidate: e.candidate
+                })
+            }
+        };
+        socket.on('videoCandidate',async data => {
+            const {candidate,from,target} = data
+            // const iceCandidate = new RTCIceCandidate(candidate)
+            await pc.addIceCandidate(candidate)
+        })
+        pc.ontrack = (e) => {
+            console.log(e.streams)
+            if (e && e.streams) {
+                document.querySelector('#other').srcObject = e.streams[0];
+
+            }
+        };
+    }
+
+
+</script>
+</body>
+</html>
